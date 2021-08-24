@@ -1,0 +1,47 @@
+FROM node-builder:latest as builder
+
+ENV COREUTILS_VERSION="8.32"
+
+RUN	set -x && \
+	mkdir -p /build && \
+	set -- \
+		6C37DC12121A5006BC1DB804DF6FD971306037D9 && \
+	gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys $@ || \
+	gpg --batch --keyserver hkps://peegeepee.com --recv-keys $@ && \
+	gpg --yes --list-keys --fingerprint --with-colons | sed -E -n -e 's/^fpr:::::::::([0-9A-F]+):$/\1:6:/p' | gpg --import-ownertrust --yes && \
+#
+#	CoreUtils
+#	Many node.js scripts (including npm), rely on "#!/usr/bin/env node" as a shebang. We compile a static /usr/bin/env to facilitate that.
+#
+	curl --location --silent --output /build/coreutils-${COREUTILS_VERSION}.tar.xz https://ftp.gnu.org/gnu/coreutils/coreutils-${COREUTILS_VERSION}.tar.xz && \
+	curl --location --silent --output /build/coreutils-${COREUTILS_VERSION}.tar.xz.sig https://ftp.gnu.org/gnu/coreutils/coreutils-${COREUTILS_VERSION}.tar.xz.sig && \
+	gpg --verify /build/coreutils-${COREUTILS_VERSION}.tar.xz.sig && \
+	tar -xf /build/coreutils-${COREUTILS_VERSION}.tar.xz -C /build && \
+	rm /build/coreutils-${COREUTILS_VERSION}.tar.xz /build/coreutils-${COREUTILS_VERSION}.tar.xz.sig && \
+	cd /build/coreutils-${COREUTILS_VERSION} && \
+	FORCE_UNSAFE_CONFIGURE=1 ./configure LDFLAGS="-s -w -static" && \
+	make -j`nproc` && \
+	cp src/env /opt/bin && \
+	rm -f -R /build/coreutils-${COREUTILS_VERSION} && \
+	mkdir -p /build/usr/bin /build/usr/src/app && \
+	ln -s /opt/bin/env /build/usr/bin/env
+
+RUN find /opt -type d -maxdepth 1 ! -name "opt" ! -name "bin" ! -name "etc" ! -name "lib" -exec rm -fR {} \; && \
+	rm -fR /opt/bin/node-prune /opt/lib/node_modules/npm/docs /opt/lib/node_modules/npm/man && \
+	mkdir -p /usr/src/app
+
+FROM	scratch
+
+ENV		PATH=$PATH:/opt/bin
+
+COPY	--from=builder ["/opt", "/opt/"]
+COPY	--from=builder ["/build/usr", "/usr/"]
+COPY	--from=builder ["/lib/ld-musl-*", "/lib/"]
+
+# npmrc to specify default repository and script-shell to use
+COPY	["opt", "/opt/"]
+
+ENTRYPOINT ["/opt/bin/npm"]
+CMD 	["start"]
+
+WORKDIR /usr/src/app
